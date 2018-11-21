@@ -27,7 +27,11 @@ class NetSocket : public QUdpSocket
         // Bind this socket to a P2Papp-specific default port.
         bool bind();
 
-public:
+        int getminport();
+        int getmaxport();
+        int getmyport();
+
+    private:
         int myPortMin, myPortMax, myPort;
 
 };
@@ -38,7 +42,7 @@ class ChatDialog : public QDialog
 
     public:
         ChatDialog();
-        void sendDatagrams(QByteArray);
+        void sendDgram(QByteArray);
         NetSocket *mySocket;
         int SeqNo;
         int remotePort; //port i receive from
@@ -65,9 +69,9 @@ class ChatDialog : public QDialog
         void sendStatus(QByteArray);
         void rumorMongering(QVariantMap messageMap);
         void addToMessageList(QVariantMap messageMap, quint32 origin, quint32 seqNo);
-        QByteArray serializeMessage(QString);
+        QByteArray serialize(QString);
         QByteArray serializeStatus();
-        void createMessageMap(QVariantMap map, QString text);
+        void createMessageMap(QVariantMap * map, QString text);
 
 };
 

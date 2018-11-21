@@ -26,14 +26,11 @@ ChatDialog::ChatDialog()
     if (!mySocket->bind())
         exit(1);
 
-    // initialize timeout timers
     timtoutTimer = new QTimer(this);
     connect(timtoutTimer, SIGNAL(timeout()), this, SLOT(timeoutHandler()));
 
-    // tracking the receipts of messages status
     m_messageStatus = new QMap<QString, quint32>;
 
-    // Initialize SeqNo
     SeqNo = 0;
     connect(textline, SIGNAL(returnPressed()), this, SLOT(gotReturnPressed()));
     connect(mySocket, SIGNAL(readyRead()), this, SLOT(readPendingDatagrams()));
@@ -41,53 +38,39 @@ ChatDialog::ChatDialog()
 
 }
 
-void ChatDialog::createMessageMap(QVariantMap map, QString text) {
-    map.insert("ChatText", text);
-    map.insert("Origin", QString::number(mySocket->myPort));
-    map.insert("SeqNo",  SeqNo);
+void ChatDialog::createMessageMap(QVariantMap * map, QString text) {
+    map->insert("ChatText", text);
+    map->insert("Origin", QString::number(mySocket->getmyport()));
+    map->insert("SeqNo",  SeqNo);
 }
-//Serialize message from QString to QByteArray
-QByteArray ChatDialog::serializeMessage(QString message_text) {
 
-    //msgQVariantMap: Intermediate serialized message
-    QVariantMap msgQVariantMap;
+QByteArray ChatDialog::serialize(QString message_text) {
 
-    createMessageMap(msgQVariantMap, message_text);
-    //ChatText:  a QString containing user-entered text;
-//    msgQVariantMap.insert("ChatText", message_text);
+    QVariantMap msgMap;
 
-//    // Origin : identifies the message’s original sender as a QString value;
-//    msgQVariantMap.insert("Origin", QString::number(mySocket->myPort));
-
-//    // SeqNo: the sequence number assigned by the original sender
-//    msgQVariantMap.insert("SeqNo",  SeqNo);
+    createMessageMap(&msgMap, message_text);
     SeqNo += 1;
 
-    // add messages to the message list every time we receive a message
-    if(messages_list.contains(QString::number(mySocket->myPort))) { // if this is not the first message
-        messages_list[QString::number(mySocket->myPort)].insert(msgQVariantMap.value("SeqNo").toUInt(), msgQVariantMap);
+    if(messages_list.contains(QString::number(mySocket->getmyport()))) {
+        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
     }
     else {
-        // qvariantmap just to initialize the data structure
         QMap<quint32, QVariantMap> qvariantmap;
-        messages_list.insert(QString::number(mySocket->myPort), qvariantmap);
-        messages_list[QString::number(mySocket->myPort)].insert(msgQVariantMap.value("SeqNo").toUInt(), msgQVariantMap);
+        messages_list.insert(QString::number(mySocket->getmyport()), qvariantmap);
+        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
     }
 
-    //serialize the message
-    QByteArray msgByteArray;
-    QDataStream stream(&msgByteArray,QIODevice::ReadWrite);
-    stream << msgQVariantMap;
+    QByteArray msgBarr;
+    QDataStream stream(&msgBarr,QIODevice::ReadWrite);
+    stream << msgMap;
 
-    return msgByteArray;
+    return msgBarr;
 }
 
-//Serialize status from QMap to QByteArray
 QByteArray ChatDialog::serializeStatus() {
     QMap<QString, QMap<QString, quint32> > statusMap;
     statusMap.insert("Want", localWants);
 
-    //serialize status
     QByteArray datagram;
     QDataStream stream(&datagram,QIODevice::ReadWrite);
     stream << statusMap;
@@ -95,45 +78,38 @@ QByteArray ChatDialog::serializeStatus() {
     return datagram;
 }
 
-// Send Rumor to neighbors
-void ChatDialog::sendDatagrams(QByteArray datagram) {
+void ChatDialog::sendDgram(QByteArray datagram) {
 
-    // check if its the first port from the range of ports, if so send datagram to the port above
-    if (mySocket->myPort == mySocket->myPortMin) {
-        neighbor = mySocket->myPort + 1;
-    // check if its the last port from the range of ports, if so send datagram to the port below
-    } else if (mySocket->myPort == mySocket->myPortMax) {
-        neighbor = mySocket->myPort - 1;
+    if (mySocket->getmyport() == mySocket->getmaxport()) {
+        neighbor = mySocket->getmyport() - 1;
+
+    } else if (mySocket->getmyport() == mySocket->getminport()) {
+        neighbor = mySocket->getmyport() + 1;
+
     } else {
-        //check if its a middle port from the range of ports, if so send datagram to the random port above or below
-        qDebug () << "INFO: Choosing a random neighbor";
         srand(time(NULL));
-        (rand() % 2 == 0) ?  neighbor = mySocket->myPort + 1: neighbor = mySocket->myPort - 1;
+        (rand() % 2 == 0) ?  neighbor = mySocket->getmyport() + 1: neighbor = mySocket->getmyport() - 1;
     }
 
-    qDebug() <<  "INFO: Sending message to port " << QString::number(neighbor);
-    // send datagram
     mySocket->writeDatagram(datagram, datagram.size(), QHostAddress("127.0.0.1"), neighbor);
-    // start timeout
     timtoutTimer->start(1000);
 }
 
-// Send Status  back to the port you received your last message
 void ChatDialog::sendStatus(QByteArray datagram)
 {
     mySocket->writeDatagram(datagram.data(), datagram.size(), QHostAddress("127.0.0.1"), remotePort);
     timtoutTimer->start(1000);
 }
 
-//Rumor Monger by sending message to a neighboring port
+
 void ChatDialog::rumorMongering(QVariantMap messageMap){
-    //Serialize rumor message
+
     QByteArray rumorBytes;
     QDataStream stream(&rumorBytes,QIODevice::ReadWrite);
+
     stream << messageMap;
-    //send to a neighbor
-    sendDatagrams(rumorBytes);
-    qDebug() << "INFO: Rumor has been mungored.";
+    sendDgram(rumorBytes);
+
 }
 
 
@@ -201,7 +177,7 @@ void ChatDialog::processMessage(QVariantMap messageMap){
     quint32 seqNo = messageMap.value("SeqNo").toUInt();
 
     //if the sender and receiver of the message are not the same
-    if(mySocket->myPort != origin) {
+    if(mySocket->getmyport() != origin) {
         //check if we have seen messages from this origin before
         if(localWants.contains(QString::number(origin))) {
             //check if the received sequence number matches the wanted sequence number
@@ -346,20 +322,20 @@ void ChatDialog::gotReturnPressed()
 {
     // Just echo the string locally.
     qDebug() << "INFO: Entered gotReturnPressed(). Message Sending: " << textline->text();
-    textview->append(QString::number(mySocket->myPort) + ": " + textline->text());
+    textview->append(QString::number(mySocket->getmyport()) + ": " + textline->text());
 
     QString input = textline->text();
-    QByteArray message = serializeMessage(input);
+    QByteArray message = serialize(input);
 
     // increment the want list before sending the datagram
-    if(localWants.contains(QString::number(mySocket->myPort))) {
-        localWants[QString::number(mySocket->myPort)] += 1;
+    if(localWants.contains(QString::number(mySocket->getmyport()))) {
+        localWants[QString::number(mySocket->getmyport())] += 1;
     }
     else {
-        localWants.insert(QString::number(mySocket->myPort), 1);
+        localWants.insert(QString::number(mySocket->getmyport()), 1);
     }
 
-    sendDatagrams(message);
+    sendDgram(message);
     textline->clear();
 }
 
@@ -401,7 +377,17 @@ bool NetSocket::bind()
     return false;
 }
 
+int NetSocket::getmaxport() {
+    return myPortMax;
+}
 
+int NetSocket::getminport() {
+    return myPortMin;
+}
+
+int NetSocket::getmyport() {
+    return myPort;
+}
 
 //main function
 int main(int argc, char **argv)
