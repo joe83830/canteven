@@ -93,14 +93,14 @@ static const uint qt_meta_data_ChatDialog[] = {
  // slots: signature, parameters, type, tag, flags
       12,   11,   11,   11, 0x0a,
       31,   11,   11,   11, 0x0a,
-      54,   11,   11,   11, 0x0a,
+      48,   11,   11,   11, 0x0a,
 
        0        // eod
 };
 
 static const char qt_meta_stringdata_ChatDialog[] = {
     "ChatDialog\0\0gotReturnPressed()\0"
-    "readPendingDatagrams()\0timeoutHandler()\0"
+    "readPendDgrams()\0timeoutHandler()\0"
 };
 
 void ChatDialog::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
@@ -110,7 +110,7 @@ void ChatDialog::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         ChatDialog *_t = static_cast<ChatDialog *>(_o);
         switch (_id) {
         case 0: _t->gotReturnPressed(); break;
-        case 1: _t->readPendingDatagrams(); break;
+        case 1: _t->readPendDgrams(); break;
         case 2: _t->timeoutHandler(); break;
         default: ;
         }

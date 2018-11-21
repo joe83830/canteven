@@ -33,7 +33,7 @@ ChatDialog::ChatDialog()
 
     SeqNo = 0;
     connect(textline, SIGNAL(returnPressed()), this, SLOT(gotReturnPressed()));
-    connect(mySocket, SIGNAL(readyRead()), this, SLOT(readPendingDatagrams()));
+    connect(mySocket, SIGNAL(readyRead()), this, SLOT(readPendDgrams()));
 
 
 }
@@ -112,9 +112,7 @@ void ChatDialog::rumorMongering(QVariantMap messageMap){
 
 }
 
-
-//slot function that gets executed when a new message has arrived
-void ChatDialog::readPendingDatagrams()
+void ChatDialog::readPendDgrams()
 {
     while (mySocket->hasPendingDatagrams()) {
         QByteArray datagram;
@@ -122,102 +120,69 @@ void ChatDialog::readPendingDatagrams()
         QHostAddress senderAddress;
         quint16 senderPort;
 
-        // receive and read message
         mySocket->readDatagram(datagram.data(), datagram.size(), &senderAddress,  &senderPort);
-        //save the sender port number in a global variable
         remotePort = senderPort;
         processIncomingDatagram(datagram);
     }
 }
 
-// process the data received to see if its a status or a message
 void ChatDialog::processIncomingDatagram(QByteArray incomingBytes)
 {
-    //create message map of type QVariantMap which holds the chat text
+
     QVariantMap messageMap;
     QDataStream serializer(&incomingBytes, QIODevice::ReadOnly);
     serializer >> messageMap;
     if (serializer.status() != QDataStream::Ok) {
-        qDebug() << "ERROR: Failed to deserialize datagram into QVariantMap";
         return;
     }
 
-    qDebug() << "INFO: Inside processIncomingDatagram" << messageMap;
-    //create status map of type QMap<QString, QMap<QString, quint32> > which holds the status
     QMap<QString, QMap<QString, quint32> > statusMap;
     QDataStream stream(&incomingBytes, QIODevice::ReadOnly);
     stream >> statusMap;
-    //check to see if the message map contains map or if it contains Chat Text
     if (messageMap.contains("Want")) {
-        qDebug() << "INFO: Received  a Status Message";
-        if (statusMap.isEmpty()) { // Also handles when "Want" key doesn't exist,
-            // b/c nil.toMap() is empty;
-            qDebug() << "ERROR: Received invalid or empty status map";
+        if (statusMap.isEmpty()) {
             return;
         }
-        //process status if the message is status
+
         processStatus(statusMap);
-    }  else if(messageMap.contains("ChatText")){
-         qDebug() << "INFO: Received a Chat message";
-         // process message if the message received is a chattext
+    } else if(messageMap.contains("ChatText")){
          processMessage(messageMap);
-    }  else {
-        //It should ideally never come here
-        qDebug() << "ERROR: Message is neither ChatText or Want";
+    } else {
         return;
     }
 }
 
-//if the message received is a chat text / rumor then check the message to see if the origin is new and send back the status and rumormonger
 void ChatDialog::processMessage(QVariantMap messageMap){
-    qDebug() << "INFO: Inside processMessage()." << messageMap;
 
-    //initialize origin and seqNo to the origin value and seqNo value in message map
     quint32 origin = messageMap.value("Origin").toUInt();
     quint32 seqNo = messageMap.value("SeqNo").toUInt();
 
-    //if the sender and receiver of the message are not the same
     if(mySocket->getmyport() != origin) {
-        //check if we have seen messages from this origin before
-        if(localWants.contains(QString::number(origin))) {
-            //check if the received sequence number matches the wanted sequence number
+        if(localWants.contains(QString::number(origin))) {\
             if (seqNo == localWants.value(QString::number(origin))) {
-                 //If this is a new message so add to message list by calling addtoMessageList function
-                 addToMessageList(messageMap, origin, seqNo);
+                 addMlist(messageMap, origin, seqNo);
                  localWants[QString::number(origin)] = seqNo + 1;
             }
-            //not sure if this is correct
-
+        } else {
+            localWants.insert(QString::number(origin), seqNo+1);
+            addMlist(messageMap, origin, seqNo);
         }
+    } else {
 
-        else {
-            //IF first time message is coming from this origin,  add to want list
-            localWants.insert(QString::number(origin), seqNo+1); // want the next message
-            //also add to the message list by calling the function
-            addToMessageList(messageMap, origin, seqNo);
-        }
-    }
-    else {
-        //sender is receiving his own message
-        qDebug() << "INFO: Sender and Receiver are the same.";
         if(localWants.contains(QString::number(origin))) {
-            // if the origin is in the local want list
             localWants[QString::number(origin)] = seqNo + 1;
-        }
-        else {
-            // if the origin is NOT in the local want list
+        } else {
             localWants.insert(QString::number(origin), seqNo+1);
         }
     }
-    //stop the time out
+
     timtoutTimer->stop();
-    //send the status back to the sender
     sendStatus(serializeStatus());
 }
 
-//add past messages to message list and rumor monger
-void ChatDialog::addToMessageList(QVariantMap messageMap, quint32 origin, quint32 seqNo){
-    qDebug() << "Inside addToMessageList";
+
+void ChatDialog::addMlist(QVariantMap messageMap, quint32 origin, quint32 seqNo){
+
     if(messages_list.contains(QString::number(origin))) {
         messages_list[QString::number(origin)].insert(seqNo, messageMap);
     }
@@ -226,11 +191,9 @@ void ChatDialog::addToMessageList(QVariantMap messageMap, quint32 origin, quint3
         messages_list.insert(QString::number(origin), qMap);
         messages_list[QString::number(origin)].insert(seqNo, messageMap);
     }
-    //receiver will now see the sent message from the sender
+
     textview->append(QString::number(origin) + ": " + messageMap.value("ChatText").toString());
-    //perform rumor mongering
     rumorMongering(messageMap);
-    //add the message that was sent to the global variable last_message
     last_message = messageMap;
 
 }
@@ -239,76 +202,50 @@ void ChatDialog::addToMessageList(QVariantMap messageMap, quint32 origin, quint3
 void ChatDialog::processStatus(QMap<QString, QMap<QString, quint32> > receivedStatusMap)
 {
 
-
     QMap<QString, QVariant> rumorMapToSend;
-    QMap<QString, quint32> remoteWants = receivedStatusMap["Want"];
+    QMap<QString, quint32> remwant = receivedStatusMap["Want"];
 
-    qDebug() << "INFO: Remote WANTS: " << remoteWants;
-    qDebug() << "INFO: Local WANTS: " << localWants;
+    enum Status { SYNCED = 1, AHEAD = 2 , BEHIND = 3 };
+    Status status =  SYNCED;
 
-
-    /* ===Decide the status===
-     * INSYNC: Local SeqNo is exactly same the remote SeqNo.
-     * AHEAD: Local SeqNo is greater than the remote SeqNo.
-     * BEHIND: Local SeqNo is less than the remote SeqNo.
-     */
-
-    enum Status { INSYNC = 1, AHEAD = 2 , BEHIND = 3 };
-    // Default status is INSYNC, if no mismatch found in the following steps.
-    Status status =  INSYNC;
-
-    // In the local WANTS, iterate through all hosts(key) and compare SeqNo(value) with remote WANTS
     QMap<QString, quint32>::const_iterator localIter = localWants.constBegin();
 
     while (localIter != localWants.constEnd()){
-        if(!remoteWants.contains(localIter.key())){
-            // If the remote WANTS does NOT contain the local node
-            qDebug() << "INFO: Local is AHEAD of remote; Remote does not have Local.";
+        if(!remwant.contains(localIter.key())){
             status = AHEAD;
             rumorMapToSend = messages_list[localIter.key()][quint32(0)];
-        } else if(remoteWants[localIter.key()] < localWants[localIter.key()]) {
-            qDebug() << "INFO: Local is AHEAD of remote; Remote has Local";
-            status = AHEAD; // we are ahead, they are behind
-            rumorMapToSend = messages_list[localIter.key()][remoteWants[localIter.key()]];
+        } else if(remwant[localIter.key()] < localWants[localIter.key()]) {
+            status = AHEAD;
+            rumorMapToSend = messages_list[localIter.key()][remwant[localIter.key()]];
         }
-        else if(remoteWants[localIter.key()] > localWants[localIter.key()]){
-            qDebug() << "INFO: Local is BEHIND remote; Local has Remote.";
+        else if(remwant[localIter.key()] > localWants[localIter.key()]){
             status = BEHIND;
         }
         ++localIter;
     }
 
-    // In the remote WANTS, iterate through all hosts(key) and compare SeqNo(value) with local WANTS
-    QMap<QString, quint32>::const_iterator remoteIter = remoteWants.constBegin();
-    while (remoteIter != remoteWants.constEnd()){
+    QMap<QString, quint32>::const_iterator remoteIter = remwant.constBegin();
+    while (remoteIter != remwant.constEnd()){
         if(!localWants.contains(remoteIter.key())) {
-            qDebug() << "INFO: Local is BEHIND remote; Local does NOT have Remote.";
             status = BEHIND;
         }
         ++remoteIter;
     }
     timtoutTimer->stop();
 
-    // Serialize the rumor
     QByteArray rumorByteArray;
     QDataStream * stream = new QDataStream(&rumorByteArray, QIODevice::ReadWrite);
     (*stream) << rumorMapToSend;
     delete stream;
 
-    // Act on the status
-    qDebug() << "INFO: Act on Status#: " << QString::number(status);
     switch(status) {
         case AHEAD:
-            qDebug() << "INFO: Local is AHEAD of the remote. Send new rumor." << rumorByteArray;
             mySocket->writeDatagram(rumorByteArray, QHostAddress::LocalHost, remotePort);
-            qDebug() << QString("INFO: Sent datagram to port " + QString::number(remotePort));
             break;
         case BEHIND:
-            qDebug() << "INFO: Local is BEHIND the remote. Reply with status.";
             sendStatus(serializeStatus());
             break;
-        case INSYNC:
-            qDebug() << "INFO: Local is IN SYNC with remote. Start Rumor Mongering.";
+        case SYNCED:
             if(qrand() > .5*RAND_MAX) {
                 rumorMongering(last_message);
             }
@@ -317,7 +254,6 @@ void ChatDialog::processStatus(QMap<QString, QMap<QString, quint32> > receivedSt
 }
 
 
-//Slot value that gets called when message is sent
 void ChatDialog::gotReturnPressed()
 {
     // Just echo the string locally.
@@ -327,7 +263,6 @@ void ChatDialog::gotReturnPressed()
     QString input = textline->text();
     QByteArray message = serialize(input);
 
-    // increment the want list before sending the datagram
     if(localWants.contains(QString::number(mySocket->getmyport()))) {
         localWants[QString::number(mySocket->getmyport())] += 1;
     }
@@ -339,14 +274,13 @@ void ChatDialog::gotReturnPressed()
     textline->clear();
 }
 
-//Timeout handler that simply sends a last message to the last port the message tried sending to.
 void ChatDialog::timeoutHandler() {
-    qDebug() << "INFO: Entered timeoutHandler().";
+    qDebug() << "Timeout.";
     QByteArray data;
     QDataStream stream(&data, QIODevice::ReadWrite);
     stream << last_message;
     mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), neighbor);
-    // reset the timer to 1 second
+
     timtoutTimer->start(1000);
 }
 

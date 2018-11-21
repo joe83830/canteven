@@ -56,7 +56,7 @@ class ChatDialog : public QDialog
 
     public slots:
         void gotReturnPressed();
-        void readPendingDatagrams();
+        void readPendDgrams();
         void timeoutHandler();
 
     private:
@@ -68,7 +68,7 @@ class ChatDialog : public QDialog
         void processMessage(QVariantMap wants);
         void sendStatus(QByteArray);
         void rumorMongering(QVariantMap messageMap);
-        void addToMessageList(QVariantMap messageMap, quint32 origin, quint32 seqNo);
+        void addMlist(QVariantMap messageMap, quint32 origin, quint32 seqNo);
         QByteArray serialize(QString);
         QByteArray serializeStatus();
         void createMessageMap(QVariantMap * map, QString text);
