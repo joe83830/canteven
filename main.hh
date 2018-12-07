@@ -76,7 +76,7 @@ class ChatDialog : public QDialog
 //        enum Role {FOLLOWER, CANDIDATE, LEADER};
 //        Role role;
         int curleader = 0;
-        int term = 0;
+        int term;
         int votedFor = 0;
         bool voted = false;
         int recterm;

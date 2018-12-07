@@ -4,7 +4,7 @@
 ChatDialog::ChatDialog()
 {
     setWindowTitle("P2Papp");
-
+    term = 0;
     // Read-only text box where we display messages from everyone.
     // This widget expands both horizontally and vertically.
     textview = new QTextEdit(this);
@@ -31,7 +31,7 @@ ChatDialog::ChatDialog()
 
     follower->addTransition(electTimer, SIGNAL(timeout()), candidate);
     follower->addTransition(this, SIGNAL(gotheartbeat()), follower);
-    candidate->addTransition(voteReqTimer, SIGNAL(timeout()), candidate);
+    candidate->addTransition(voteReqTimer, SIGNAL(timeout()), follower);
     candidate->addTransition(this, SIGNAL(gotheartbeat()), follower);
     candidate->addTransition(this, SIGNAL(gothigherterm()), follower);
     candidate->addTransition(this, SIGNAL(gotthreevotes()), leader);
@@ -88,6 +88,7 @@ void ChatDialog::follwerHandler() {
     if (rolemachine.configuration().contains(follower)) {
         qDebug() << "I'm a Follower";
     }
+
     int r = rand() % (301 - 150) + 150;
     electTimer->start(r);
 
@@ -99,10 +100,11 @@ void ChatDialog::follwerHandler() {
 void ChatDialog::govote() {
 
     electTimer->stop();
+    qDebug() << "Asked to goVOTE";
     int r = rand() % (301 - 150) + 150;
     electTimer->start(r);
 
-    QMap<QString, QVariant> ballot;
+    QVariantMap ballot;
     if (recterm < term) {
         ballot.insert("votefor", false);
     } else {
@@ -124,30 +126,41 @@ void ChatDialog::candidateHandler() {
 
     connect(this, SIGNAL(gotvotes()), this, SLOT(processVotes()));
     numofvotes = 1;
-    votedNodes.clear();
-    voteReqTimer->start(50);
-    sendVoteReq();
+    term ++;
+
     if (rolemachine.configuration().contains(candidate)) {
         qDebug() << "I'm a candidate now!";
+        qDebug() << term;
     }
     if (rolemachine.configuration().contains(follower)) {
         qDebug() << "I'm a Follower";
     }
+    votedNodes.clear();
+    voteReqTimer->start(50);
+    sendVoteReq();
 
 }
 
 void ChatDialog::sendVoteReq() {
+    qDebug() << "Sending Vote Request......";
 
-    QMap<QString, qint32> votereq;
+    QVariantMap votereq;
     votereq.insert("candidate", mySocket->getmyport());
     votereq.insert("term", term);
 
     QByteArray data;
     QDataStream stream(&data, QIODevice::ReadWrite);
     stream << votereq;
-    // send vote requests to other nodes
+    qDebug() << votereq;
+
+//    QVariantMap test;
+//    QDataStream inStream(&data, QIODevice::ReadOnly);
+//    inStream >> test;
+//    qDebug() << test;
+//     send vote requests to other nodes
     for (int i = 0; i < 4; i++) {
         if (votedNodes.count(participants[i]) == 0) {
+            qDebug() << "Loop send";
             mySocket->writeDatagram(data, QHostAddress::LocalHost, participants[i]);
         }
     }
@@ -167,13 +180,16 @@ void ChatDialog::processVotes() {
 
 
 void ChatDialog::leaderHandler() {
+    if (rolemachine.configuration().contains(follower)) {
+        qDebug() << "I'm a FUCKING LEADER!!!!";
+    }
     broadcast();
     heartbeattimer->start(30);
     connect(heartbeattimer, SIGNAL(timeout()), this, SLOT(broadcast()));
 }
 
 void ChatDialog::broadcast() {
-    QMap<QString, QVariant> content;
+    QVariantMap content;
     content.insert("leader", mySocket->getmyport());
     content.insert("term", term);
 
@@ -278,19 +294,24 @@ void ChatDialog::readPendDgrams()
 
 void ChatDialog::processIncomingDatagram(QByteArray incomingBytes)
 {
-
+    qDebug() << "Received <Something>";
     QVariantMap messageMap;
     QDataStream serializer(&incomingBytes, QIODevice::ReadOnly);
     serializer >> messageMap;
-    if (serializer.status() != QDataStream::Ok) {
-        return;
-    }
+    qDebug() << serializer.status();
+//    if (serializer.status() != QDataStream::Ok) {
+//        return;
+//    }
+    qDebug() << "Still alive";
+    qDebug() << messageMap;
 
     if (messageMap.contains("leader")) {
         curleader = messageMap["leader"].toInt();
         term = messageMap["term"].toInt();
         emit gotheartbeat();
     } else if (messageMap.contains("candidate")) {
+        recterm = messageMap["term"].toInt();
+        qDebug() << "<Something> is vote request";
         emit gotvoterequest();
     } else if (messageMap.contains("votefor")) {
         emit gotvotes();
