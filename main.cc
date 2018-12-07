@@ -21,13 +21,55 @@ ChatDialog::ChatDialog()
     layout->addWidget(textline);
     setLayout(layout);
 
+    follower = new QState;
+    candidate = new QState;
+    leader = new QState;
+    stopped = new QState;
+
+    follower->addTransition(electTimer, SIGNAL(timeout()), candidate);
+    follower->addTransition(heartbeat, SIGNAL(), follower);
+    candidate->addTransition(voteReqTimeout, SIGNAL(timeout()), candidate);
+    candidate->addTransition(heartbeat, SIGNAL(), follower);
+    candidate->addTransition(receiveVRhigh, SIGNAL(), follower);
+    candidate->addTransition(getvotes, SIGNAL(), leader);
+    leader->addTransition(forcestop, SIGNAL(), stopped);
+    stopped->addTransition(restart, SIGNAL(), follower);
+
+    rolemachine.addState(follower);
+    rolemachine.addState(candidate);
+    rolemachine.addState(leader);
+    rolemachine.addState(stopped);
+
+    rolemachine.setInitialState(follower);
+    rolemachine.start();
+
+
     //bind mySocket
     mySocket = new NetSocket();
     if (!mySocket->bind())
         exit(1);
 
+    for (int i = mySocket->getminport(); i <= mySocket->getmaxport(); i++) {
+        if (i == mySocket->getmyport()) {
+            continue;
+        }
+        participants.push_back(i);
+    }
+
     timtoutTimer = new QTimer(this);
     connect(timtoutTimer, SIGNAL(timeout()), this, SLOT(timeoutHandler()));
+
+//    int r = rand() % (301 - 150) + 150;
+    electTimer = new QTimer(this);
+    voteReqTimer = new QTimer(this);
+////    connect(electTimer, SIGNAL(timeout()), this, SLOT(electTimeoutHandler()));
+//    electTimer->start(r);
+
+    connect(follower, SIGNAL(entered()), this, SLOT(follwerHandler()));
+    connect(candidate, SIGNAL(entered()), this, SLOT(candidateHandler()));
+    connect(leader, SIGNAL(entered()), this, SLOT(leaderHandler()));
+    connect(stopped, SIGNAL(entered()), this, SLOT(stoppedHandler()));
+
 
     m_messageStatus = new QMap<QString, quint32>;
 
@@ -35,6 +77,11 @@ ChatDialog::ChatDialog()
     connect(textline, SIGNAL(returnPressed()), this, SLOT(gotReturnPressed()));
     connect(mySocket, SIGNAL(readyRead()), this, SLOT(readPendDgrams()));
 
+}
+
+void ChatDialog::follwerHandler() {
+    int r = rand() % (301 - 150) + 150;
+    electTimer->start(r);
 
 }
 
@@ -92,13 +139,15 @@ void ChatDialog::sendDgram(QByteArray datagram) {
     }
 
     mySocket->writeDatagram(datagram, datagram.size(), QHostAddress("127.0.0.1"), neighbor);
-    timtoutTimer->start(1000);
+    int r = rand() % (301 - 150) + 150;
+    timtoutTimer->start(r);
 }
 
 void ChatDialog::sendStatus(QByteArray datagram)
 {
     mySocket->writeDatagram(datagram.data(), datagram.size(), QHostAddress("127.0.0.1"), remotePort);
-    timtoutTimer->start(1000);
+    int r = rand() % (301 - 150) + 150;
+    timtoutTimer->start(r);
 }
 
 
@@ -281,8 +330,40 @@ void ChatDialog::timeoutHandler() {
     stream << last_message;
     mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), neighbor);
 
-    timtoutTimer->start(1000);
+    int r = rand() % (301 - 150) + 150;
+    timtoutTimer->start(r);
 }
+
+void ChatDialog::sendVoteReq() {
+
+    connect(voteReqTimer, SIGNAL(timeout()), this, SLOT(voteReqTimeoutHandler()));
+
+    QMap<QString, qint32> votereq;
+    votereq.insert("candidate", mySocket->getmyport());
+    votereq.insert("term", term);
+
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::ReadWrite);
+    stream << votereq;
+    for (int i = 0; i < 4; i++) {
+        mySocket->writeDatagram(data, QHostAddress::LocalHost, participants[i]);
+    }
+    // send vote requests to other nodes
+
+    voteReqTimer->start(50);
+}
+
+void ChatDialog::voteReqTimeoutHandler() {
+    voteReqTimer->stop();
+    numofvotes = 0;
+    role = FOLLOWER;
+    votedFor = 0;
+    voted = false;
+    int r = rand() % (301 - 150) + 150;
+    electTimer->start(r);
+}
+
+
 
 
 //constructing NetSocket Class
@@ -292,7 +373,7 @@ NetSocket::NetSocket()
     // This makes it trivial for up to four P2Papp instances per user to find each other on the same host, barring UDP port conflicts with other applications (which are quite possible).
     // We use the range from 32768 to 49151 for this purpose.
     myPortMin = 32768 + (getuid() % 4096)*4;
-    myPortMax = myPortMin + 3;
+    myPortMax = myPortMin + 4;
 }
 
 bool NetSocket::bind()

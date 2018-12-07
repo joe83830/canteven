@@ -58,7 +58,7 @@ class ChatDialog : public QDialog
         QTimer * timtoutTimer;
         QTimer * electTimer;
         QTimer * antientropyTimer;
-        QTimer * voteReqTimeout;
+        QTimer * voteReqTimer;
 
         QStateMachine rolemachine;
         QState *follower;
