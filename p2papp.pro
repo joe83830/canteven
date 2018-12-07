@@ -11,3 +11,5 @@ QT += network
 # Input
 HEADERS += main.hh
 SOURCES += main.cc
+
+QMAKE_CXXFLAGS = -g

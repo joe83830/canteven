@@ -18,6 +18,7 @@
 #include <vector>
 #include <QStateMachine>
 #include <QState>
+#include <unordered_set>
 
 using namespace std;
 
@@ -52,13 +53,16 @@ class ChatDialog : public QDialog
         int SeqNo;
         int remotePort; //port i receive from
         int neighbor; //port i send to
+        int to_be_voted;
+
         QMap<QString, quint32> localWants;
         QVariantMap last_message;
         QMap<QString, QMap<quint32, QVariantMap> > messages_list;
         QTimer * timtoutTimer;
         QTimer * electTimer;
         QTimer * antientropyTimer;
-        QTimer * voteReqTimeout;
+        QTimer * voteReqTimer;
+        QTimer * heartbeattimer;
 
         QStateMachine rolemachine;
         QState *follower;
@@ -66,28 +70,45 @@ class ChatDialog : public QDialog
         QState *leader;
         QState *stopped;
 
-        enum Role {FOLLOWER, CANDIDATE, LEADER};
-        Role role;
+
+
+
+//        enum Role {FOLLOWER, CANDIDATE, LEADER};
+//        Role role;
         int curleader = 0;
         int term = 0;
         int votedFor = 0;
         bool voted = false;
+        int recterm;
+        unordered_set<int> votedNodes;
+
+
         vector<int> participants;
         int numofvotes;
         int majority = 3;
         void sendVoteReq();
-        void voteReqTimeoutHandler();
 
-        void follwerHandler();
-        void candidateHandler();
-        void leaderHandler();
-        void stoppedHandler();
-
+        QMap<QString, QVariant> receivedVotes;
 
     public slots:
         void gotReturnPressed();
         void readPendDgrams();
-        void timeoutHandler();
+//        void voteReqTimeoutHandler();
+        void follwerHandler();
+        void candidateHandler();
+        void leaderHandler();
+        void processVotes();
+        void govote();
+        void broadcast();
+//        void stoppedHandler();
+//        void timeoutHandler();
+
+    signals:
+        void gothigherterm();
+        void gotthreevotes();
+        void gotheartbeat();
+        void gotvoterequest();
+        void gotvotes();
 
 
     private:

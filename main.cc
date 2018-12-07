@@ -21,19 +21,22 @@ ChatDialog::ChatDialog()
     layout->addWidget(textline);
     setLayout(layout);
 
-    follower = new QState;
-    candidate = new QState;
-    leader = new QState;
-    stopped = new QState;
+    follower = new QState();
+    candidate = new QState();
+    leader = new QState();
+    stopped = new QState();
+
+    electTimer = new QTimer(this);
+    voteReqTimer = new QTimer(this);
 
     follower->addTransition(electTimer, SIGNAL(timeout()), candidate);
-    follower->addTransition(heartbeat, SIGNAL(), follower);
-    candidate->addTransition(voteReqTimeout, SIGNAL(timeout()), candidate);
-    candidate->addTransition(heartbeat, SIGNAL(), follower);
-    candidate->addTransition(receiveVRhigh, SIGNAL(), follower);
-    candidate->addTransition(getvotes, SIGNAL(), leader);
-    leader->addTransition(forcestop, SIGNAL(), stopped);
-    stopped->addTransition(restart, SIGNAL(), follower);
+    follower->addTransition(this, SIGNAL(gotheartbeat()), follower);
+    candidate->addTransition(voteReqTimer, SIGNAL(timeout()), candidate);
+    candidate->addTransition(this, SIGNAL(gotheartbeat()), follower);
+    candidate->addTransition(this, SIGNAL(gothigherterm()), follower);
+    candidate->addTransition(this, SIGNAL(gotthreevotes()), leader);
+//    leader->addTransition(forcestop, SIGNAL(), stopped);
+//    stopped->addTransition(restart, SIGNAL(), follower);
 
     rolemachine.addState(follower);
     rolemachine.addState(candidate);
@@ -43,6 +46,7 @@ ChatDialog::ChatDialog()
     rolemachine.setInitialState(follower);
     rolemachine.start();
 
+    qDebug() << "Printable";
 
     //bind mySocket
     mySocket = new NetSocket();
@@ -56,19 +60,18 @@ ChatDialog::ChatDialog()
         participants.push_back(i);
     }
 
-    timtoutTimer = new QTimer(this);
-    connect(timtoutTimer, SIGNAL(timeout()), this, SLOT(timeoutHandler()));
+//    timtoutTimer = new QTimer(this);
+//    connect(timtoutTimer, SIGNAL(timeout()), this, SLOT(timeoutHandler()));
 
 //    int r = rand() % (301 - 150) + 150;
-    electTimer = new QTimer(this);
-    voteReqTimer = new QTimer(this);
+
 ////    connect(electTimer, SIGNAL(timeout()), this, SLOT(electTimeoutHandler()));
 //    electTimer->start(r);
 
     connect(follower, SIGNAL(entered()), this, SLOT(follwerHandler()));
     connect(candidate, SIGNAL(entered()), this, SLOT(candidateHandler()));
     connect(leader, SIGNAL(entered()), this, SLOT(leaderHandler()));
-    connect(stopped, SIGNAL(entered()), this, SLOT(stoppedHandler()));
+//    connect(stopped, SIGNAL(entered()), this, SLOT(stoppedHandler()));
 
 
     m_messageStatus = new QMap<QString, quint32>;
@@ -80,50 +83,148 @@ ChatDialog::ChatDialog()
 }
 
 void ChatDialog::follwerHandler() {
+
+    qDebug() << "In followerHandler now";
+    if (rolemachine.configuration().contains(follower)) {
+        qDebug() << "I'm a Follower";
+    }
     int r = rand() % (301 - 150) + 150;
     electTimer->start(r);
 
+// Received signal and asked to vote
+    connect(this, SIGNAL(gotvoterequest()), this, SLOT(govote()));
+
 }
 
-void ChatDialog::createMessageMap(QVariantMap * map, QString text) {
-    map->insert("ChatText", text);
-    map->insert("Origin", QString::number(mySocket->getmyport()));
-    map->insert("SeqNo",  SeqNo);
-}
+void ChatDialog::govote() {
 
-QByteArray ChatDialog::serialize(QString message_text) {
+    electTimer->stop();
+    int r = rand() % (301 - 150) + 150;
+    electTimer->start(r);
 
-    QVariantMap msgMap;
-
-    createMessageMap(&msgMap, message_text);
-    SeqNo += 1;
-
-    if(messages_list.contains(QString::number(mySocket->getmyport()))) {
-        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
-    }
-    else {
-        QMap<quint32, QVariantMap> qvariantmap;
-        messages_list.insert(QString::number(mySocket->getmyport()), qvariantmap);
-        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
+    QMap<QString, QVariant> ballot;
+    if (recterm < term) {
+        ballot.insert("votefor", false);
+    } else {
+        ballot.insert("votefor", true);
+        ballot.insert("id", mySocket->getmyport());
+        term = recterm;
     }
 
-    QByteArray msgBarr;
-    QDataStream stream(&msgBarr,QIODevice::ReadWrite);
-    stream << msgMap;
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::ReadWrite);
+    stream << ballot;
+    mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), to_be_voted);
 
-    return msgBarr;
 }
 
-QByteArray ChatDialog::serializeStatus() {
-    QMap<QString, QMap<QString, quint32> > statusMap;
-    statusMap.insert("Want", localWants);
+void ChatDialog::candidateHandler() {
 
-    QByteArray datagram;
-    QDataStream stream(&datagram,QIODevice::ReadWrite);
-    stream << statusMap;
+    // Received votes, store stuff in receivedvotes
 
-    return datagram;
+    connect(this, SIGNAL(gotvotes()), this, SLOT(processVotes()));
+    numofvotes = 1;
+    votedNodes.clear();
+    voteReqTimer->start(50);
+    sendVoteReq();
+    if (rolemachine.configuration().contains(candidate)) {
+        qDebug() << "I'm a candidate now!";
+    }
+    if (rolemachine.configuration().contains(follower)) {
+        qDebug() << "I'm a Follower";
+    }
+
 }
+
+void ChatDialog::sendVoteReq() {
+
+    QMap<QString, qint32> votereq;
+    votereq.insert("candidate", mySocket->getmyport());
+    votereq.insert("term", term);
+
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::ReadWrite);
+    stream << votereq;
+    // send vote requests to other nodes
+    for (int i = 0; i < 4; i++) {
+        if (votedNodes.count(participants[i]) == 0) {
+            mySocket->writeDatagram(data, QHostAddress::LocalHost, participants[i]);
+        }
+    }
+}
+
+void ChatDialog::processVotes() {
+    if (!receivedVotes["votefor"].toBool()) {
+        emit gothigherterm();
+    } else {
+        votedNodes.insert(receivedVotes["id"].toInt());
+        numofvotes ++;
+        if (numofvotes == 3) {
+            emit gotthreevotes();
+        }
+    }
+}
+
+
+void ChatDialog::leaderHandler() {
+    broadcast();
+    heartbeattimer->start(30);
+    connect(heartbeattimer, SIGNAL(timeout()), this, SLOT(broadcast()));
+}
+
+void ChatDialog::broadcast() {
+    QMap<QString, QVariant> content;
+    content.insert("leader", mySocket->getmyport());
+    content.insert("term", term);
+
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::ReadWrite);
+    stream << content;
+
+    for (int i = 0; i < 4; i++) {
+        mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), participants[i]);
+    }
+}
+
+//void ChatDialog::createMessageMap(QVariantMap * map, QString text) {
+//    map->insert("ChatText", text);
+//    map->insert("Origin", QString::number(mySocket->getmyport()));
+//    map->insert("SeqNo",  SeqNo);
+//}
+
+//QByteArray ChatDialog::serialize(QString message_text) {
+
+//    QVariantMap msgMap;
+
+//    createMessageMap(&msgMap, message_text);
+//    SeqNo += 1;
+
+//    if(messages_list.contains(QString::number(mySocket->getmyport()))) {
+//        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
+//    }
+//    else {
+//        QMap<quint32, QVariantMap> qvariantmap;
+//        messages_list.insert(QString::number(mySocket->getmyport()), qvariantmap);
+//        messages_list[QString::number(mySocket->getmyport())].insert(msgMap.value("SeqNo").toUInt(), msgMap);
+//    }
+
+//    QByteArray msgBarr;
+//    QDataStream stream(&msgBarr,QIODevice::ReadWrite);
+//    stream << msgMap;
+
+//    return msgBarr;
+//}
+
+//QByteArray ChatDialog::serializeStatus() {
+//    QMap<QString, QMap<QString, quint32> > statusMap;
+//    statusMap.insert("Want", localWants);
+
+//    QByteArray datagram;
+//    QDataStream stream(&datagram,QIODevice::ReadWrite);
+//    stream << statusMap;
+
+//    return datagram;
+//}
 
 void ChatDialog::sendDgram(QByteArray datagram) {
 
@@ -143,23 +244,23 @@ void ChatDialog::sendDgram(QByteArray datagram) {
     timtoutTimer->start(r);
 }
 
-void ChatDialog::sendStatus(QByteArray datagram)
-{
-    mySocket->writeDatagram(datagram.data(), datagram.size(), QHostAddress("127.0.0.1"), remotePort);
-    int r = rand() % (301 - 150) + 150;
-    timtoutTimer->start(r);
-}
+//void ChatDialog::sendStatus(QByteArray datagram)
+//{
+//    mySocket->writeDatagram(datagram.data(), datagram.size(), QHostAddress("127.0.0.1"), remotePort);
+//    int r = rand() % (301 - 150) + 150;
+//    timtoutTimer->start(r);
+//}
 
 
-void ChatDialog::rumorMongering(QVariantMap messageMap){
+//void ChatDialog::rumorMongering(QVariantMap messageMap){
 
-    QByteArray rumorBytes;
-    QDataStream stream(&rumorBytes,QIODevice::ReadWrite);
+//    QByteArray rumorBytes;
+//    QDataStream stream(&rumorBytes,QIODevice::ReadWrite);
 
-    stream << messageMap;
-    sendDgram(rumorBytes);
+//    stream << messageMap;
+//    sendDgram(rumorBytes);
 
-}
+//}
 
 void ChatDialog::readPendDgrams()
 {
@@ -185,122 +286,132 @@ void ChatDialog::processIncomingDatagram(QByteArray incomingBytes)
         return;
     }
 
-    QMap<QString, QMap<QString, quint32> > statusMap;
-    QDataStream stream(&incomingBytes, QIODevice::ReadOnly);
-    stream >> statusMap;
-    if (messageMap.contains("Want")) {
-        if (statusMap.isEmpty()) {
-            return;
-        }
-
-        processStatus(statusMap);
-    } else if(messageMap.contains("ChatText")){
-         processMessage(messageMap);
-    } else {
-        return;
+    if (messageMap.contains("leader")) {
+        curleader = messageMap["leader"].toInt();
+        term = messageMap["term"].toInt();
+        emit gotheartbeat();
+    } else if (messageMap.contains("candidate")) {
+        emit gotvoterequest();
+    } else if (messageMap.contains("votefor")) {
+        emit gotvotes();
     }
+
+//    QMap<QString, quint32> statusMap;
+//    QDataStream stream(&incomingBytes, QIODevice::ReadOnly);
+//    stream >> statusMap;
+//    if (messageMap.contains("Want")) {
+//        if (statusMap.isEmpty()) {
+//            return;
+//        }
+
+//        processStatus(statusMap);
+//    } else if(messageMap.contains("ChatText")){
+//         processMessage(messageMap);
+//    } else {
+//        return;
+//    }
 }
 
-void ChatDialog::processMessage(QVariantMap messageMap){
+//void ChatDialog::processMessage(QVariantMap messageMap){
 
-    quint32 origin = messageMap.value("Origin").toUInt();
-    quint32 seqNo = messageMap.value("SeqNo").toUInt();
+//    quint32 origin = messageMap.value("Origin").toUInt();
+//    quint32 seqNo = messageMap.value("SeqNo").toUInt();
 
-    if(mySocket->getmyport() != origin) {
-        if(localWants.contains(QString::number(origin))) {\
-            if (seqNo == localWants.value(QString::number(origin))) {
-                 addMlist(messageMap, origin, seqNo);
-                 localWants[QString::number(origin)] = seqNo + 1;
-            }
-        } else {
-            localWants.insert(QString::number(origin), seqNo+1);
-            addMlist(messageMap, origin, seqNo);
-        }
-    } else {
+//    if(mySocket->getmyport() != origin) {
+//        if(localWants.contains(QString::number(origin))) {\
+//            if (seqNo == localWants.value(QString::number(origin))) {
+//                 addMlist(messageMap, origin, seqNo);
+//                 localWants[QString::number(origin)] = seqNo + 1;
+//            }
+//        } else {
+//            localWants.insert(QString::number(origin), seqNo+1);
+//            addMlist(messageMap, origin, seqNo);
+//        }
+//    } else {
 
-        if(localWants.contains(QString::number(origin))) {
-            localWants[QString::number(origin)] = seqNo + 1;
-        } else {
-            localWants.insert(QString::number(origin), seqNo+1);
-        }
-    }
+//        if(localWants.contains(QString::number(origin))) {
+//            localWants[QString::number(origin)] = seqNo + 1;
+//        } else {
+//            localWants.insert(QString::number(origin), seqNo+1);
+//        }
+//    }
 
-    timtoutTimer->stop();
-    sendStatus(serializeStatus());
-}
-
-
-void ChatDialog::addMlist(QVariantMap messageMap, quint32 origin, quint32 seqNo){
-
-    if(messages_list.contains(QString::number(origin))) {
-        messages_list[QString::number(origin)].insert(seqNo, messageMap);
-    }
-    else {
-        QMap<quint32, QMap<QString, QVariant> > qMap;
-        messages_list.insert(QString::number(origin), qMap);
-        messages_list[QString::number(origin)].insert(seqNo, messageMap);
-    }
-
-    textview->append(QString::number(origin) + ": " + messageMap.value("ChatText").toString());
-    rumorMongering(messageMap);
-    last_message = messageMap;
-
-}
+//    timtoutTimer->stop();
+//    sendStatus(serializeStatus());
+//}
 
 
-void ChatDialog::processStatus(QMap<QString, QMap<QString, quint32> > receivedStatusMap)
-{
+//void ChatDialog::addMlist(QVariantMap messageMap, quint32 origin, quint32 seqNo){
 
-    QMap<QString, QVariant> rumorMapToSend;
-    QMap<QString, quint32> remwant = receivedStatusMap["Want"];
+//    if(messages_list.contains(QString::number(origin))) {
+//        messages_list[QString::number(origin)].insert(seqNo, messageMap);
+//    }
+//    else {
+//        QMap<quint32, QMap<QString, QVariant> > qMap;
+//        messages_list.insert(QString::number(origin), qMap);
+//        messages_list[QString::number(origin)].insert(seqNo, messageMap);
+//    }
 
-    enum Status { SYNCED = 1, AHEAD = 2 , BEHIND = 3 };
-    Status status =  SYNCED;
+//    textview->append(QString::number(origin) + ": " + messageMap.value("ChatText").toString());
+//    rumorMongering(messageMap);
+//    last_message = messageMap;
 
-    QMap<QString, quint32>::const_iterator localIter = localWants.constBegin();
+//}
 
-    while (localIter != localWants.constEnd()){
-        if(!remwant.contains(localIter.key())){
-            status = AHEAD;
-            rumorMapToSend = messages_list[localIter.key()][quint32(0)];
-        } else if(remwant[localIter.key()] < localWants[localIter.key()]) {
-            status = AHEAD;
-            rumorMapToSend = messages_list[localIter.key()][remwant[localIter.key()]];
-        }
-        else if(remwant[localIter.key()] > localWants[localIter.key()]){
-            status = BEHIND;
-        }
-        ++localIter;
-    }
 
-    QMap<QString, quint32>::const_iterator remoteIter = remwant.constBegin();
-    while (remoteIter != remwant.constEnd()){
-        if(!localWants.contains(remoteIter.key())) {
-            status = BEHIND;
-        }
-        ++remoteIter;
-    }
-    timtoutTimer->stop();
+//void ChatDialog::processStatus(QMap<QString, QMap<QString, quint32> > receivedStatusMap)
+//{
 
-    QByteArray rumorByteArray;
-    QDataStream * stream = new QDataStream(&rumorByteArray, QIODevice::ReadWrite);
-    (*stream) << rumorMapToSend;
-    delete stream;
+//    QMap<QString, QVariant> rumorMapToSend;
+//    QMap<QString, quint32> remwant = receivedStatusMap["Want"];
 
-    switch(status) {
-        case AHEAD:
-            mySocket->writeDatagram(rumorByteArray, QHostAddress::LocalHost, remotePort);
-            break;
-        case BEHIND:
-            sendStatus(serializeStatus());
-            break;
-        case SYNCED:
-            if(qrand() > .5*RAND_MAX) {
-                rumorMongering(last_message);
-            }
-            break;
-    }
-}
+//    enum Status { SYNCED = 1, AHEAD = 2 , BEHIND = 3 };
+//    Status status =  SYNCED;
+
+//    QMap<QString, quint32>::const_iterator localIter = localWants.constBegin();
+
+//    while (localIter != localWants.constEnd()){
+//        if(!remwant.contains(localIter.key())){
+//            status = AHEAD;
+//            rumorMapToSend = messages_list[localIter.key()][quint32(0)];
+//        } else if(remwant[localIter.key()] < localWants[localIter.key()]) {
+//            status = AHEAD;
+//            rumorMapToSend = messages_list[localIter.key()][remwant[localIter.key()]];
+//        }
+//        else if(remwant[localIter.key()] > localWants[localIter.key()]){
+//            status = BEHIND;
+//        }
+//        ++localIter;
+//    }
+
+//    QMap<QString, quint32>::const_iterator remoteIter = remwant.constBegin();
+//    while (remoteIter != remwant.constEnd()){
+//        if(!localWants.contains(remoteIter.key())) {
+//            status = BEHIND;
+//        }
+//        ++remoteIter;
+//    }
+//    timtoutTimer->stop();
+
+//    QByteArray rumorByteArray;
+//    QDataStream * stream = new QDataStream(&rumorByteArray, QIODevice::ReadWrite);
+//    (*stream) << rumorMapToSend;
+//    delete stream;
+
+//    switch(status) {
+//        case AHEAD:
+//            mySocket->writeDatagram(rumorByteArray, QHostAddress::LocalHost, remotePort);
+//            break;
+//        case BEHIND:
+//            sendStatus(serializeStatus());
+//            break;
+//        case SYNCED:
+//            if(qrand() > .5*RAND_MAX) {
+//                rumorMongering(last_message);
+//            }
+//            break;
+//    }
+//}
 
 
 void ChatDialog::gotReturnPressed()
@@ -310,61 +421,29 @@ void ChatDialog::gotReturnPressed()
     textview->append(QString::number(mySocket->getmyport()) + ": " + textline->text());
 
     QString input = textline->text();
-    QByteArray message = serialize(input);
+//    QByteArray message = serialize(input);
 
-    if(localWants.contains(QString::number(mySocket->getmyport()))) {
-        localWants[QString::number(mySocket->getmyport())] += 1;
-    }
-    else {
-        localWants.insert(QString::number(mySocket->getmyport()), 1);
-    }
+//    if(localWants.contains(QString::number(mySocket->getmyport()))) {
+//        localWants[QString::number(mySocket->getmyport())] += 1;
+//    }
+//    else {
+//        localWants.insert(QString::number(mySocket->getmyport()), 1);
+//    }
 
-    sendDgram(message);
-    textline->clear();
+//    sendDgram(message);
+//    textline->clear();
 }
 
-void ChatDialog::timeoutHandler() {
-    qDebug() << "Timeout.";
-    QByteArray data;
-    QDataStream stream(&data, QIODevice::ReadWrite);
-    stream << last_message;
-    mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), neighbor);
+//void ChatDialog::timeoutHandler() {
+//    qDebug() << "Timeout.";
+//    QByteArray data;
+//    QDataStream stream(&data, QIODevice::ReadWrite);
+//    stream << last_message;
+//    mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), neighbor);
 
-    int r = rand() % (301 - 150) + 150;
-    timtoutTimer->start(r);
-}
-
-void ChatDialog::sendVoteReq() {
-
-    connect(voteReqTimer, SIGNAL(timeout()), this, SLOT(voteReqTimeoutHandler()));
-
-    QMap<QString, qint32> votereq;
-    votereq.insert("candidate", mySocket->getmyport());
-    votereq.insert("term", term);
-
-    QByteArray data;
-    QDataStream stream(&data, QIODevice::ReadWrite);
-    stream << votereq;
-    for (int i = 0; i < 4; i++) {
-        mySocket->writeDatagram(data, QHostAddress::LocalHost, participants[i]);
-    }
-    // send vote requests to other nodes
-
-    voteReqTimer->start(50);
-}
-
-void ChatDialog::voteReqTimeoutHandler() {
-    voteReqTimer->stop();
-    numofvotes = 0;
-    role = FOLLOWER;
-    votedFor = 0;
-    voted = false;
-    int r = rand() % (301 - 150) + 150;
-    electTimer->start(r);
-}
-
-
-
+//    int r = rand() % (301 - 150) + 150;
+//    timtoutTimer->start(r);
+//}
 
 //constructing NetSocket Class
 NetSocket::NetSocket()
@@ -407,12 +486,14 @@ int NetSocket::getmyport() {
 //main function
 int main(int argc, char **argv)
 {
+    printf("AAAAAAAaa");
     // Initialize Qt toolkit
     QApplication app(argc,argv);
 
     // Create an initial chat dialog window
     ChatDialog dialog;
     dialog.show();
+//    printf("AAAAAAAaa");
 
     // Enter the Qt main loop; everything else is event driven
     return app.exec();
