@@ -53,7 +53,7 @@ class ChatDialog : public QDialog
         int SeqNo;
         int remotePort; //port i receive from
         int neighbor; //port i send to
-        int to_be_voted;
+//        int to_be_voted;
 
         QMap<QString, quint32> localWants;
         QVariantMap last_message;
@@ -79,16 +79,17 @@ class ChatDialog : public QDialog
         int term;
         int votedFor = 0;
         bool voted = false;
-        int recterm;
+//        int recterm;
         unordered_set<int> votedNodes;
 
 
         vector<int> participants;
         int numofvotes;
         int majority = 3;
+
         void sendVoteReq();
 
-        QMap<QString, QVariant> receivedVotes;
+//        QVariantMap receivedVotes;
 
     public slots:
         void gotReturnPressed();
@@ -97,18 +98,20 @@ class ChatDialog : public QDialog
         void follwerHandler();
         void candidateHandler();
         void leaderHandler();
-        void processVotes();
-        void govote();
+        void processVotes(QVariantMap receivedVotes);
+        void govote(int recterm ,int cand);
         void broadcast();
-//        void stoppedHandler();
+        void stoppedHandler();
 //        void timeoutHandler();
 
     signals:
         void gothigherterm();
         void gotthreevotes();
         void gotheartbeat();
-        void gotvoterequest();
-        void gotvotes();
+        void gotvoterequest(int recterm, int cand);
+        void gotvotes(QVariantMap receivedVotes);
+        void gotstopsignal();
+        void gotrestartsignal();
 
 
     private:

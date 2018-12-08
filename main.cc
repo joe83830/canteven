@@ -28,6 +28,7 @@ ChatDialog::ChatDialog()
 
     electTimer = new QTimer(this);
     voteReqTimer = new QTimer(this);
+    heartbeattimer = new QTimer(this);
 
     follower->addTransition(electTimer, SIGNAL(timeout()), candidate);
     follower->addTransition(this, SIGNAL(gotheartbeat()), follower);
@@ -35,8 +36,8 @@ ChatDialog::ChatDialog()
     candidate->addTransition(this, SIGNAL(gotheartbeat()), follower);
     candidate->addTransition(this, SIGNAL(gothigherterm()), follower);
     candidate->addTransition(this, SIGNAL(gotthreevotes()), leader);
-//    leader->addTransition(forcestop, SIGNAL(), stopped);
-//    stopped->addTransition(restart, SIGNAL(), follower);
+    leader->addTransition(this, SIGNAL(gotstopsignal()), stopped);
+    stopped->addTransition(this, SIGNAL(gotrestartsignal()), follower);
 
     rolemachine.addState(follower);
     rolemachine.addState(candidate);
@@ -71,7 +72,7 @@ ChatDialog::ChatDialog()
     connect(follower, SIGNAL(entered()), this, SLOT(follwerHandler()));
     connect(candidate, SIGNAL(entered()), this, SLOT(candidateHandler()));
     connect(leader, SIGNAL(entered()), this, SLOT(leaderHandler()));
-//    connect(stopped, SIGNAL(entered()), this, SLOT(stoppedHandler()));
+    connect(stopped, SIGNAL(entered()), this, SLOT(stoppedHandler()));
 
 
     m_messageStatus = new QMap<QString, quint32>;
@@ -89,25 +90,26 @@ void ChatDialog::follwerHandler() {
         qDebug() << "I'm a Follower";
     }
 
-    int r = rand() % (301 - 150) + 150;
+    int r = rand() % (3001 - 1500) + 1500;
     electTimer->start(r);
 
 // Received signal and asked to vote
-    connect(this, SIGNAL(gotvoterequest()), this, SLOT(govote()));
+    connect(this, SIGNAL(gotvoterequest(int, int)), this, SLOT(govote(int, int)));
 
 }
 
-void ChatDialog::govote() {
+void ChatDialog::govote(int recterm, int cand) {
 
     electTimer->stop();
     qDebug() << "Asked to goVOTE";
-    int r = rand() % (301 - 150) + 150;
+    int r = rand() % (3001 - 1500) + 1500;
     electTimer->start(r);
 
     QVariantMap ballot;
     if (recterm < term) {
         ballot.insert("votefor", false);
     } else {
+        qDebug() << "I VOTED!!!";
         ballot.insert("votefor", true);
         ballot.insert("id", mySocket->getmyport());
         term = recterm;
@@ -116,15 +118,15 @@ void ChatDialog::govote() {
     QByteArray data;
     QDataStream stream(&data, QIODevice::ReadWrite);
     stream << ballot;
-    mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), to_be_voted);
+    mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), cand);
 
 }
 
 void ChatDialog::candidateHandler() {
 
-    // Received votes, store stuff in receivedvotes
+    // Received votes, store stuff in
 
-    connect(this, SIGNAL(gotvotes()), this, SLOT(processVotes()));
+    connect(this, SIGNAL(gotvotes(QVariantMap)), this, SLOT(processVotes(QVariantMap)));
     numofvotes = 1;
     term ++;
 
@@ -136,7 +138,7 @@ void ChatDialog::candidateHandler() {
         qDebug() << "I'm a Follower";
     }
     votedNodes.clear();
-    voteReqTimer->start(50);
+    voteReqTimer->start(500);
     sendVoteReq();
 
 }
@@ -161,45 +163,75 @@ void ChatDialog::sendVoteReq() {
     for (int i = 0; i < 4; i++) {
         if (votedNodes.count(participants[i]) == 0) {
             qDebug() << "Loop send";
+            qDebug() << participants[i];
             mySocket->writeDatagram(data, QHostAddress::LocalHost, participants[i]);
         }
     }
 }
 
-void ChatDialog::processVotes() {
+void ChatDialog::processVotes(QVariantMap receivedVotes) {
+    qDebug() << "Processing votes";
+    qDebug() << receivedVotes;
+    qDebug() << numofvotes;
     if (!receivedVotes["votefor"].toBool()) {
+        qDebug() << "Got false";
         emit gothigherterm();
     } else {
-        votedNodes.insert(receivedVotes["id"].toInt());
-        numofvotes ++;
-        if (numofvotes == 3) {
-            emit gotthreevotes();
+        qDebug() << "Got true";
+//        qDebug() <<
+        if (votedNodes.count(receivedVotes["id"].toInt()) == 0) {
+            votedNodes.insert(receivedVotes["id"].toInt());
+            qDebug() << "Added to voted nodes";
+            numofvotes ++;
+            qDebug() << "Numofvotes += 1";
+            if (numofvotes >= 3) {
+                emit gotthreevotes();
+            }
+            qDebug() << "Not enough votes yet";
         }
     }
+    qDebug() << "Exited if-else";
 }
 
 
 void ChatDialog::leaderHandler() {
-    if (rolemachine.configuration().contains(follower)) {
+    qDebug() << "In leader handler";
+    if (rolemachine.configuration().contains(leader)) {
         qDebug() << "I'm a FUCKING LEADER!!!!";
     }
     broadcast();
-    heartbeattimer->start(30);
+    qDebug() << "out of broadcast";
+    heartbeattimer->start(300);
+    qDebug() << "hbtimer started";
     connect(heartbeattimer, SIGNAL(timeout()), this, SLOT(broadcast()));
+    qDebug() << "made it here";
 }
 
 void ChatDialog::broadcast() {
+    qDebug() << "In Broadcast";
     QVariantMap content;
     content.insert("leader", mySocket->getmyport());
     content.insert("term", term);
+    qDebug() << "Past first segment";
 
     QByteArray data;
     QDataStream stream(&data, QIODevice::ReadWrite);
     stream << content;
+    qDebug() << "Past second segment";
 
     for (int i = 0; i < 4; i++) {
         mySocket->writeDatagram(data, data.size(), QHostAddress("127.0.0.1"), participants[i]);
     }
+    qDebug() << "Past third segment";
+}
+
+void ChatDialog::stoppedHandler() {
+    qDebug() << "In Stopped handler";
+    heartbeattimer->stop();
+    electTimer->stop();
+    disconnect(this, SIGNAL(gotvoterequest(int, int)), this, SLOT(govote));
+    // Disconnect gotvoterequest signal slot
+
 }
 
 //void ChatDialog::createMessageMap(QVariantMap * map, QString text) {
@@ -256,7 +288,7 @@ void ChatDialog::sendDgram(QByteArray datagram) {
     }
 
     mySocket->writeDatagram(datagram, datagram.size(), QHostAddress("127.0.0.1"), neighbor);
-    int r = rand() % (301 - 150) + 150;
+    int r = rand() % (3001 - 1500) + 1500;
     timtoutTimer->start(r);
 }
 
@@ -308,13 +340,20 @@ void ChatDialog::processIncomingDatagram(QByteArray incomingBytes)
     if (messageMap.contains("leader")) {
         curleader = messageMap["leader"].toInt();
         term = messageMap["term"].toInt();
+        qDebug() << "Got heartbeat, I respect my leader";
+        if (rolemachine.configuration().contains(follower)) {
+            qDebug() << "I'm a sheep that follows guidance";
+        }
         emit gotheartbeat();
     } else if (messageMap.contains("candidate")) {
-        recterm = messageMap["term"].toInt();
+//        recterm = messageMap["term"].toInt();
+//        to_be_voted = messageMap["candidate"].toInt();
         qDebug() << "<Something> is vote request";
-        emit gotvoterequest();
+        emit gotvoterequest(messageMap["term"].toInt(), messageMap["candidate"].toInt());
     } else if (messageMap.contains("votefor")) {
-        emit gotvotes();
+        qDebug() << "<Something is a vote>";
+//        receivedVotes = messageMap;
+        emit gotvotes(messageMap);
     }
 
 //    QMap<QString, quint32> statusMap;
@@ -442,6 +481,14 @@ void ChatDialog::gotReturnPressed()
     textview->append(QString::number(mySocket->getmyport()) + ": " + textline->text());
 
     QString input = textline->text();
+    qDebug() << input;
+    if (input == "STOP") {
+        emit gotstopsignal();
+    }
+
+    if (input == "RESTART") {
+        emit gotrestartsignal();
+    }
 //    QByteArray message = serialize(input);
 
 //    if(localWants.contains(QString::number(mySocket->getmyport()))) {
